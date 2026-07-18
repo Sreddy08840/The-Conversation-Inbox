@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-graphite-950 text-graphite-200 antialiased font-sans;
+  }
+}
