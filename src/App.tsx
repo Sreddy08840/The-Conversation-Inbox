@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Conversation, Message } from './types/inbox';
 
@@ -69,6 +69,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [forceFail, setForceFail] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Track write failure details per conversation ID
   const [errorMap, setErrorMap] = useState<Record<string, { action: string; message: string }>>({});
@@ -78,6 +79,7 @@ function App() {
     data: conversations,
     isLoading: isQueueLoading,
     isError: isQueueError,
+    refetch: refetchQueue,
   } = useQuery({
     queryKey: ['conversations'],
     queryFn: fetchConversations,
@@ -89,17 +91,6 @@ function App() {
     queryFn: () => fetchConversationDetail(selectedId!),
     enabled: !!selectedId,
   });
-
-  // Dismiss selection on Escape key
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setSelectedId(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   // Live aggregated stats
   const activeUnassigned = conversations?.filter((c) => c.status === 'UNASSIGNED') || [];
@@ -113,10 +104,7 @@ function App() {
       : 0;
 
   // Filter conversations for the queue listing
-  // Settle animation logic: resolved rows are animating out, but we keep them in the array
-  // so the CSS transition (.animating-out) has time to execute.
   const triageConversations = conversations || [];
-
   const filteredConversations = triageConversations.filter((c) => {
     const term = searchTerm.toLowerCase();
     return (
@@ -137,7 +125,6 @@ function App() {
       const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
       const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
 
-      // Optimistic updates
       if (previousConversations) {
         queryClient.setQueryData<Conversation[]>(
           ['conversations'],
@@ -154,7 +141,6 @@ function App() {
         });
       }
 
-      // Clear any error for this ID
       setErrorMap((prev) => {
         const next = { ...prev };
         delete next[id];
@@ -190,7 +176,6 @@ function App() {
       const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
       const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
 
-      // Optimistic updates
       if (previousConversations) {
         queryClient.setQueryData<Conversation[]>(
           ['conversations'],
@@ -241,7 +226,6 @@ function App() {
       const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
       const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
 
-      // Optimistic updates
       if (previousConversations) {
         queryClient.setQueryData<Conversation[]>(
           ['conversations'],
@@ -290,7 +274,6 @@ function App() {
       const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
       const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
 
-      // Optimistic updates
       if (previousConversations) {
         queryClient.setQueryData<Conversation[]>(
           ['conversations'],
@@ -332,6 +315,90 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['conversationDetail', id] });
     },
   });
+
+  // Keyboard Shortcuts Hook
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // 1. Ignore shortcuts if user is typing inside search inputs
+      const isInputFocused =
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA';
+
+      // Global Escape key behavior
+      if (event.key === 'Escape') {
+        if (isInputFocused) {
+          (document.activeElement as HTMLElement).blur();
+        } else {
+          setSelectedId(null);
+        }
+        return;
+      }
+
+      if (isInputFocused) return;
+
+      // 2. Search shortcut: '/' key
+      if (event.key === '/') {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      // 3. Move queue selections: j (down) / k (up)
+      const visibleItems = filteredConversations.filter((c) => c.status !== 'RESOLVED');
+      if (event.key === 'j' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        if (visibleItems.length === 0) return;
+        const currentIndex = visibleItems.findIndex((c) => c.id === selectedId);
+        if (currentIndex === -1) {
+          setSelectedId(visibleItems[0].id);
+        } else if (currentIndex < visibleItems.length - 1) {
+          setSelectedId(visibleItems[currentIndex + 1].id);
+        }
+        return;
+      }
+
+      if (event.key === 'k' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (visibleItems.length === 0) return;
+        const currentIndex = visibleItems.findIndex((c) => c.id === selectedId);
+        if (currentIndex === -1) {
+          setSelectedId(visibleItems[visibleItems.length - 1].id);
+        } else if (currentIndex > 0) {
+          setSelectedId(visibleItems[currentIndex - 1].id);
+        }
+        return;
+      }
+
+      // 4. Action keys: c (claim), r (resolve), s (snooze)
+      if (!selectedId) return;
+      const current = visibleItems.find((c) => c.id === selectedId);
+      if (!current) return;
+
+      if (event.key === 'c') {
+        if (current.status === 'UNASSIGNED') {
+          claimMutation.mutate(selectedId);
+        }
+      } else if (event.key === 'r') {
+        if (current.status !== 'RESOLVED') {
+          resolveMutation.mutate({ id: selectedId, forceFail });
+        }
+      } else if (event.key === 's') {
+        if (current.status !== 'SNOOZED' && current.status !== 'RESOLVED') {
+          snoozeMutation.mutate(selectedId);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    selectedId,
+    filteredConversations,
+    forceFail,
+    claimMutation,
+    resolveMutation,
+    snoozeMutation,
+  ]);
 
   // Trigger retry of a failed mutation
   const handleRetry = (id: string, action: string) => {
@@ -466,7 +533,7 @@ function App() {
                 <h1 className="text-xl font-bold tracking-tight text-graphite-50 font-display">
                   Triage Queue
                 </h1>
-                <p className="text-[11px] text-graphite-400">CX agent triage workspace</p>
+                <p className="text-[11px] text-graphite-400 font-sans">CX agent triage workspace</p>
               </div>
               <div className="flex items-center space-x-2 bg-graphite-900 px-2.5 py-1.5 rounded-lg border border-graphite-800/50">
                 <input
@@ -528,10 +595,11 @@ function App() {
                 </svg>
               </span>
               <input
+                ref={searchInputRef}
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search queue..."
+                placeholder="Search queue... (press '/' to focus)"
                 className="w-full pl-9 pr-8 py-1.5 text-sm bg-graphite-900 border border-graphite-800/80 rounded-lg text-graphite-100 placeholder-graphite-500 focus:outline-none focus:border-graphite-700/80 transition-colors"
               />
               {searchTerm && (
@@ -553,44 +621,71 @@ function App() {
           </header>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+            {/* Initial Loading Skeletons - Exact row size alignment */}
             {isQueueLoading &&
               Array.from({ length: 6 }).map((_, idx) => (
                 <div
                   key={idx}
-                  className="p-3 bg-graphite-900/40 border border-graphite-800/50 rounded-lg flex items-center space-x-3 h-[72px] relative overflow-hidden animate-pulse"
+                  className="p-3 bg-graphite-900/40 border border-graphite-800/50 rounded-lg flex items-center space-x-3 h-[86px] relative overflow-hidden animate-pulse"
                 >
-                  <div className="absolute top-0 left-0 w-[3px] h-full bg-graphite-800" />
+                  <div className="absolute top-0 left-0 w-[4px] h-full bg-graphite-800" />
                   <div className="flex-1 space-y-2.5 pl-1.5">
                     <div className="flex justify-between items-center">
                       <div className="h-3 w-24 bg-graphite-800 rounded" />
-                      <div className="h-3.5 w-14 bg-graphite-800/50 rounded" />
+                      <div className="h-3 w-10 bg-graphite-800/50 rounded" />
                     </div>
                     <div className="h-2.5 w-4/5 bg-graphite-800/70 rounded" />
+                    <div className="h-3 w-32 bg-graphite-800/40 rounded" />
                   </div>
                 </div>
               ))}
 
+            {/* Audited Queue Error State */}
             {isQueueError && (
-              <div className="text-center py-10 text-xs text-urgency-critical font-sans">
-                Failed to load mock queue from MSW.
+              <div className="text-center py-12 px-4 space-y-3 bg-graphite-900/10 border border-rose-900/30 rounded-xl">
+                <span className="text-3xl">⚠️</span>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold text-rose-400">
+                    Unable to load conversations
+                  </h3>
+                  <p className="text-xs text-graphite-400 max-w-[240px] mx-auto leading-relaxed">
+                    The mock API service failed to respond. Refresh or restart your browser mock
+                    worker.
+                  </p>
+                </div>
+                <button
+                  onClick={() => refetchQueue()}
+                  className="px-3 py-1 bg-graphite-900 hover:bg-graphite-800 active:bg-graphite-950 text-xs font-semibold rounded text-graphite-200 border border-graphite-800 transition-colors"
+                >
+                  Reload Queue
+                </button>
               </div>
             )}
 
-            {!isQueueLoading && !isQueueError && triageConversations.length === 0 && (
-              <div className="text-center py-16 px-4 bg-graphite-900/20 border border-dashed border-graphite-800 rounded-xl">
-                <span className="text-4xl">🎉</span>
-                <h3 className="text-sm font-bold text-graphite-100 mt-2 font-display">
-                  All caught up!
-                </h3>
-              </div>
-            )}
-
+            {/* Audited Caught-up win state */}
             {!isQueueLoading &&
               !isQueueError &&
-              filteredConversations.length === 0 &&
-              triageConversations.length > 0 && (
-                <div className="text-center py-12 text-xs text-graphite-500 font-sans">
-                  No matching tickets found.
+              triageConversations.filter((c) => c.status !== 'RESOLVED').length === 0 && (
+                <div className="text-center py-16 px-4 bg-graphite-900/20 border border-dashed border-graphite-800 rounded-xl space-y-3">
+                  <span className="text-4xl block">🎉</span>
+                  <div className="space-y-1">
+                    <h3 className="text-base font-bold text-graphite-100 font-display">
+                      Triage Queue Clean
+                    </h3>
+                    <p className="text-xs text-graphite-400 max-w-[240px] mx-auto leading-relaxed">
+                      All active tickets are handled. Enjoy the empty inbox!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+            {/* Audited search empty state */}
+            {!isQueueLoading &&
+              !isQueueError &&
+              filteredConversations.filter((c) => c.status !== 'RESOLVED').length === 0 &&
+              triageConversations.filter((c) => c.status !== 'RESOLVED').length > 0 && (
+                <div className="text-center py-12 space-y-2 text-xs text-graphite-500 font-sans">
+                  <span>No matching conversations. Refine your search query.</span>
                 </div>
               )}
 
@@ -628,7 +723,7 @@ function App() {
                       isResolved ? 'animating-out' : ''
                     } ${
                       isSelected
-                        ? 'bg-graphite-900 border-graphite-700 shadow-[0_2px_8px_rgba(0,0,0,0.2)]'
+                        ? 'bg-graphite-900 border-amber-500/50 ring-1 ring-amber-500/30 shadow-[0_0_12px_rgba(251,191,36,0.05)]'
                         : 'bg-graphite-900/30 border-graphite-800/50 hover:bg-graphite-900/50 hover:border-graphite-800'
                     }`}
                   >
@@ -672,7 +767,6 @@ function App() {
                             {c.status}
                           </span>
                         )}
-                        {/* Quick resolve from row */}
                         {!isResolved && (
                           <button
                             onClick={(e) => {
@@ -742,7 +836,6 @@ function App() {
                 </div>
               </header>
 
-              {/* Triage Action bar inside the detail panel */}
               <div className="px-6 py-3 bg-graphite-950/40 border-b border-graphite-800 flex flex-wrap gap-2 shrink-0">
                 {currentConversation.status === 'UNASSIGNED' && (
                   <button
@@ -758,7 +851,7 @@ function App() {
                   <button
                     onClick={() => reassignMutation.mutate(currentConversation.id)}
                     disabled={reassignMutation.isPending}
-                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-100 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-300 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
                   >
                     {reassignMutation.isPending ? 'Reassigning...' : 'Reassign Queue'}
                   </button>
@@ -789,16 +882,16 @@ function App() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                {/* Custom Inline Error panel with Retry option */}
+                {/* Triage failed retry panel */}
                 {currentError && (
                   <div className="p-4 bg-rose-950/40 border border-rose-900/40 rounded-xl flex items-center justify-between text-xs font-sans text-rose-300 animate-fadeIn shrink-0">
                     <div className="flex items-center space-x-2">
                       <span className="text-base">⚠️</span>
                       <div>
                         <span className="font-bold uppercase tracking-wider block text-[9px] text-rose-400">
-                          Triage Action Failed ({currentError.action})
+                          Triage failed ({currentError.action})
                         </span>
-                        <span>{currentError.message}</span>
+                        <span>The conversation write path rejected the request.</span>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2 shrink-0">
@@ -818,7 +911,7 @@ function App() {
                   </div>
                 )}
 
-                {/* Score reasoning breakdown */}
+                {/* Score breakdown inspect */}
                 <div className="bg-graphite-950/50 border border-graphite-800 p-4 rounded-xl space-y-3">
                   <div className="flex justify-between items-center border-b border-graphite-800/80 pb-2">
                     <span className="text-[10px] font-bold text-graphite-400 uppercase tracking-wider font-mono">
@@ -862,7 +955,7 @@ function App() {
                   </div>
                 </div>
 
-                {/* Transcript Section */}
+                {/* Transcript messages timeline */}
                 <div className="space-y-4">
                   <h3 className="text-xs font-semibold text-graphite-400 uppercase tracking-wider font-mono">
                     Conversation Transcript
@@ -926,7 +1019,7 @@ function App() {
               </div>
             </div>
           ) : (
-            /* Empty state */
+            /* Empty state selection detail pane */
             <div className="m-auto space-y-6 max-w-md p-6 text-center select-none">
               <div className="w-16 h-16 rounded-full bg-graphite-950/80 border border-graphite-800 flex items-center justify-center mx-auto text-graphite-500 shadow-inner">
                 <svg
@@ -953,7 +1046,7 @@ function App() {
                 </p>
               </div>
 
-              {/* Keyboard shortcuts Reference */}
+              {/* Keyboard shortcuts cheatsheet */}
               <div className="bg-graphite-950/60 border border-graphite-800/80 rounded-xl p-4 text-left space-y-3">
                 <span className="text-[10px] font-semibold text-graphite-400 tracking-wider uppercase font-sans">
                   Keyboard Navigation
