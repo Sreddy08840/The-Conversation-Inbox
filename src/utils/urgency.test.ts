@@ -18,6 +18,7 @@ function createMockConversation(
     escalationReason: 'NONE',
     assignedAgentId: null,
     status: 'UNASSIGNED',
+    messages: [],
     ...overrides,
   };
 }

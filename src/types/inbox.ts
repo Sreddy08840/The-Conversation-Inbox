@@ -9,10 +9,19 @@ export type TriageAction = 'CLAIM' | 'RESOLVE' | 'SNOOZE' | 'REASSIGN';
 
 export type ConversationStatus = 'UNASSIGNED' | 'ASSIGNED' | 'SNOOZED' | 'RESOLVED';
 
+export interface Message {
+  id: string;
+  sender: 'CUSTOMER' | 'AGENT' | 'SYSTEM';
+  text: string;
+  createdAt: string; // ISO Timestamp format
+}
+
 export interface Conversation {
   id: string;
   customerName: string;
   customerTier: CustomerTier;
+  customerEmail?: string;
+  customerPhone?: string;
   lastMessage: string;
   lastMessageAt: string; // ISO Timestamp format
   waitTimeMinutes: number;
@@ -23,4 +32,5 @@ export interface Conversation {
   status: ConversationStatus;
   urgencyScore: number;
   urgencyReason: string;
+  messages: Message[];
 }

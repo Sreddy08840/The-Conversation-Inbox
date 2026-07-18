@@ -4,6 +4,7 @@ import type {
   EscalationReason,
   Sentiment,
   ConversationStatus,
+  Message,
 } from '../types/inbox';
 import { calculateUrgency } from './urgency';
 
@@ -135,10 +136,73 @@ export function generateMockConversations(count = 45): Conversation[] {
     // Compute timestamp based on waitTimeMinutes ago
     const lastMessageAt = new Date(Date.now() - waitTimeMinutes * 60 * 1000).toISOString();
 
+    const cleanCustomerName = customerName.split(' (')[0];
+    const customerEmail = `${cleanCustomerName.toLowerCase().replace(/\s+/g, '.')}@example.com`;
+    const customerPhone = `+1 (555) 01${getRandomInt(10, 99)}-${getRandomInt(1000, 9999)}`;
+
+    const messages: Message[] = [];
+    const baseTime = Date.now() - waitTimeMinutes * 60 * 1000;
+
+    // Message 1: Customer initial check-in (10 mins before last message)
+    messages.push({
+      id: `${id}-msg-1`,
+      sender: 'CUSTOMER',
+      text: 'Hi there, I have an issue that I need help with.',
+      createdAt: new Date(baseTime - 10 * 60 * 1000).toISOString(),
+    });
+
+    // Message 2: System auto-response
+    messages.push({
+      id: `${id}-msg-2`,
+      sender: 'SYSTEM',
+      text: 'Automated: Thank you for contacting support. A CX agent has been notified.',
+      createdAt: new Date(baseTime - 9 * 60 * 1000).toISOString(),
+    });
+
+    // Message 3: Customer's actual issue (last message)
+    messages.push({
+      id: `${id}-msg-3`,
+      sender: 'CUSTOMER',
+      text: lastMessage,
+      createdAt: new Date(baseTime).toISOString(),
+    });
+
+    // Optional follow-ups based on status
+    if (status === 'ASSIGNED') {
+      messages.push({
+        id: `${id}-msg-4`,
+        sender: 'AGENT',
+        text: 'Hello! I am claiming this ticket and looking into this issue for you right now.',
+        createdAt: new Date(baseTime + 2 * 60 * 1000).toISOString(),
+      });
+    } else if (status === 'SNOOZED') {
+      messages.push({
+        id: `${id}-msg-4`,
+        sender: 'AGENT',
+        text: 'I have escalated this to our level 2 team. I will snooze this until we receive their feedback.',
+        createdAt: new Date(baseTime + 5 * 60 * 1000).toISOString(),
+      });
+    } else if (status === 'RESOLVED') {
+      messages.push({
+        id: `${id}-msg-4`,
+        sender: 'AGENT',
+        text: 'I have processed the update. The issue should be fully resolved now.',
+        createdAt: new Date(baseTime + 15 * 60 * 1000).toISOString(),
+      });
+      messages.push({
+        id: `${id}-msg-5`,
+        sender: 'SYSTEM',
+        text: 'System: Conversation marked as resolved.',
+        createdAt: new Date(baseTime + 15 * 60 * 1000 + 1000).toISOString(),
+      });
+    }
+
     const baseConv: Omit<Conversation, 'urgencyScore' | 'urgencyReason'> = {
       id,
       customerName,
       customerTier,
+      customerEmail,
+      customerPhone,
       lastMessage,
       lastMessageAt,
       waitTimeMinutes,
@@ -147,6 +211,7 @@ export function generateMockConversations(count = 45): Conversation[] {
       escalationReason,
       assignedAgentId,
       status,
+      messages,
     };
 
     const { score: urgencyScore, reason: urgencyReason } = calculateUrgency(baseConv);
