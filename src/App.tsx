@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Conversation, Message } from './types/inbox';
 
 // Fetch all conversations from MSW Mock API
@@ -20,12 +20,60 @@ async function fetchConversationDetail(id: string): Promise<Conversation> {
   return res.json();
 }
 
+// POST triage endpoints
+async function claimConversation(id: string): Promise<Conversation> {
+  const res = await fetch(`/api/conversations/${id}/claim`, { method: 'POST' });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server error claiming ticket');
+  }
+  return res.json();
+}
+
+async function resolveConversation({
+  id,
+  forceFail,
+}: {
+  id: string;
+  forceFail: boolean;
+}): Promise<Conversation> {
+  const url = `/api/conversations/${id}/resolve${forceFail ? '?fail=true' : ''}`;
+  const res = await fetch(url, { method: 'POST' });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server error resolving ticket');
+  }
+  return res.json();
+}
+
+async function snoozeConversation(id: string): Promise<Conversation> {
+  const res = await fetch(`/api/conversations/${id}/snooze`, { method: 'POST' });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server error snoozing ticket');
+  }
+  return res.json();
+}
+
+async function reassignConversation(id: string): Promise<Conversation> {
+  const res = await fetch(`/api/conversations/${id}/reassign`, { method: 'POST' });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server error reassigning ticket');
+  }
+  return res.json();
+}
+
 function App() {
+  const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [forceFail, setForceFail] = useState(false);
 
-  // TanStack Query to fetch the list of conversations
+  // Track write failure details per conversation ID
+  const [errorMap, setErrorMap] = useState<Record<string, { action: string; message: string }>>({});
+
+  // TanStack Query list fetcher
   const {
     data: conversations,
     isLoading: isQueueLoading,
@@ -35,14 +83,14 @@ function App() {
     queryFn: fetchConversations,
   });
 
-  // Fetch detailed conversation in the background when an item is selected
+  // Fetch detailed conversation in the background
   const { data: detailedConversation, isLoading: isDetailLoading } = useQuery({
     queryKey: ['conversationDetail', selectedId],
     queryFn: () => fetchConversationDetail(selectedId!),
     enabled: !!selectedId,
   });
 
-  // Keyboard listener: deselect/close on pressing Escape
+  // Dismiss selection on Escape key
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -53,7 +101,7 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Calculate stats from the complete (non-filtered) dataset
+  // Live aggregated stats
   const activeUnassigned = conversations?.filter((c) => c.status === 'UNASSIGNED') || [];
   const unassignedCount = activeUnassigned.length;
   const breachedCount = activeUnassigned.filter((c) => c.urgencyScore >= 80).length;
@@ -65,7 +113,10 @@ function App() {
       : 0;
 
   // Filter conversations for the queue listing
-  const triageConversations = conversations?.filter((c) => c.status !== 'RESOLVED') || [];
+  // Settle animation logic: resolved rows are animating out, but we keep them in the array
+  // so the CSS transition (.animating-out) has time to execute.
+  const triageConversations = conversations || [];
+
   const filteredConversations = triageConversations.filter((c) => {
     const term = searchTerm.toLowerCase();
     return (
@@ -76,33 +127,249 @@ function App() {
     );
   });
 
-  // OPTIMISTIC UI MERGE LOGIC
-  // Find queue-level data for the selected ID immediately so we have it before detail resolves
+  // Query mutations with Optimistic UI updates
+  const claimMutation = useMutation({
+    mutationFn: claimConversation,
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['conversations'] });
+      await queryClient.cancelQueries({ queryKey: ['conversationDetail', id] });
+
+      const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
+      const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
+
+      // Optimistic updates
+      if (previousConversations) {
+        queryClient.setQueryData<Conversation[]>(
+          ['conversations'],
+          previousConversations.map((c) =>
+            c.id === id ? { ...c, status: 'ASSIGNED', assignedAgentId: 'agent-1' } : c
+          )
+        );
+      }
+      if (previousDetail) {
+        queryClient.setQueryData<Conversation>(['conversationDetail', id], {
+          ...previousDetail,
+          status: 'ASSIGNED',
+          assignedAgentId: 'agent-1',
+        });
+      }
+
+      // Clear any error for this ID
+      setErrorMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
+      return { previousConversations, previousDetail, id };
+    },
+    onError: (err, id, context) => {
+      if (context?.previousConversations) {
+        queryClient.setQueryData(['conversations'], context.previousConversations);
+      }
+      if (context?.previousDetail) {
+        queryClient.setQueryData(['conversationDetail', id], context.previousDetail);
+      }
+      setErrorMap((prev) => ({
+        ...prev,
+        [id]: { action: 'claim', message: err.message },
+      }));
+    },
+    onSettled: (_data, _error, id) => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['conversationDetail', id] });
+    },
+  });
+
+  const resolveMutation = useMutation({
+    mutationFn: resolveConversation,
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ['conversations'] });
+      await queryClient.cancelQueries({ queryKey: ['conversationDetail', id] });
+
+      const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
+      const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
+
+      // Optimistic updates
+      if (previousConversations) {
+        queryClient.setQueryData<Conversation[]>(
+          ['conversations'],
+          previousConversations.map((c) => (c.id === id ? { ...c, status: 'RESOLVED' } : c))
+        );
+      }
+      if (previousDetail) {
+        queryClient.setQueryData<Conversation>(['conversationDetail', id], {
+          ...previousDetail,
+          status: 'RESOLVED',
+        });
+      }
+
+      setErrorMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
+      return { previousConversations, previousDetail, id };
+    },
+    onError: (err, variables, context) => {
+      const id = variables.id;
+      if (context?.previousConversations) {
+        queryClient.setQueryData(['conversations'], context.previousConversations);
+      }
+      if (context?.previousDetail) {
+        queryClient.setQueryData(['conversationDetail', id], context.previousDetail);
+      }
+      setErrorMap((prev) => ({
+        ...prev,
+        [id]: { action: 'resolve', message: err.message },
+      }));
+    },
+    onSettled: (_data, _error, variables) => {
+      const id = variables.id;
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['conversationDetail', id] });
+    },
+  });
+
+  const snoozeMutation = useMutation({
+    mutationFn: snoozeConversation,
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['conversations'] });
+      await queryClient.cancelQueries({ queryKey: ['conversationDetail', id] });
+
+      const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
+      const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
+
+      // Optimistic updates
+      if (previousConversations) {
+        queryClient.setQueryData<Conversation[]>(
+          ['conversations'],
+          previousConversations.map((c) => (c.id === id ? { ...c, status: 'SNOOZED' } : c))
+        );
+      }
+      if (previousDetail) {
+        queryClient.setQueryData<Conversation>(['conversationDetail', id], {
+          ...previousDetail,
+          status: 'SNOOZED',
+        });
+      }
+
+      setErrorMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
+      return { previousConversations, previousDetail, id };
+    },
+    onError: (err, id, context) => {
+      if (context?.previousConversations) {
+        queryClient.setQueryData(['conversations'], context.previousConversations);
+      }
+      if (context?.previousDetail) {
+        queryClient.setQueryData(['conversationDetail', id], context.previousDetail);
+      }
+      setErrorMap((prev) => ({
+        ...prev,
+        [id]: { action: 'snooze', message: err.message },
+      }));
+    },
+    onSettled: (_data, _error, id) => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['conversationDetail', id] });
+    },
+  });
+
+  const reassignMutation = useMutation({
+    mutationFn: reassignConversation,
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['conversations'] });
+      await queryClient.cancelQueries({ queryKey: ['conversationDetail', id] });
+
+      const previousConversations = queryClient.getQueryData<Conversation[]>(['conversations']);
+      const previousDetail = queryClient.getQueryData<Conversation>(['conversationDetail', id]);
+
+      // Optimistic updates
+      if (previousConversations) {
+        queryClient.setQueryData<Conversation[]>(
+          ['conversations'],
+          previousConversations.map((c) =>
+            c.id === id ? { ...c, status: 'UNASSIGNED', assignedAgentId: null } : c
+          )
+        );
+      }
+      if (previousDetail) {
+        queryClient.setQueryData<Conversation>(['conversationDetail', id], {
+          ...previousDetail,
+          status: 'UNASSIGNED',
+          assignedAgentId: null,
+        });
+      }
+
+      setErrorMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
+      return { previousConversations, previousDetail, id };
+    },
+    onError: (err, id, context) => {
+      if (context?.previousConversations) {
+        queryClient.setQueryData(['conversations'], context.previousConversations);
+      }
+      if (context?.previousDetail) {
+        queryClient.setQueryData(['conversationDetail', id], context.previousDetail);
+      }
+      setErrorMap((prev) => ({
+        ...prev,
+        [id]: { action: 'reassign', message: err.message },
+      }));
+    },
+    onSettled: (_data, _error, id) => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['conversationDetail', id] });
+    },
+  });
+
+  // Trigger retry of a failed mutation
+  const handleRetry = (id: string, action: string) => {
+    if (action === 'claim') claimMutation.mutate(id);
+    else if (action === 'resolve') resolveMutation.mutate({ id, forceFail });
+    else if (action === 'snooze') snoozeMutation.mutate(id);
+    else if (action === 'reassign') reassignMutation.mutate(id);
+  };
+
+  const handleDismissError = (id: string) => {
+    setErrorMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
+
+  // Optimistic detail display context
   const listConversation = conversations?.find((c) => c.id === selectedId);
-
-  // Merged object that prefers detailed API values, falling back to cached queue list values
   const currentConversation = detailedConversation || listConversation;
+  const currentError = selectedId ? errorMap[selectedId] : null;
 
-  // Compute detailed urgency points breakdown for display
+  // Compute breakdown points
   const getScoreBreakdown = (c: Omit<Conversation, 'urgencyScore' | 'urgencyReason'>) => {
     const breakdown = [];
-    // 1. Tier
     if (c.customerTier === 'VIP') breakdown.push({ factor: 'Customer Tier: VIP', points: 30 });
     else if (c.customerTier === 'PRIME')
       breakdown.push({ factor: 'Customer Tier: Prime', points: 15 });
 
-    // 2. Sentiment
     if (c.sentiment === 'ANGRY') breakdown.push({ factor: 'Sentiment: Angry', points: 40 });
     else if (c.sentiment === 'FRUSTRATED')
       breakdown.push({ factor: 'Sentiment: Frustrated', points: 20 });
     else if (c.sentiment === 'POSITIVE')
       breakdown.push({ factor: 'Sentiment: Positive (Reduction)', points: -10 });
 
-    // 3. CSAT Drop
     if (c.csatScore !== null && c.csatScore < 3)
       breakdown.push({ factor: 'CSAT Drop (< 3)', points: 25 });
 
-    // 4. Wait Time
     const waitPts = Math.min(c.waitTimeMinutes * 1.5, 60);
     if (waitPts > 0) {
       breakdown.push({
@@ -111,7 +378,6 @@ function App() {
       });
     }
 
-    // 5. Escalation Reason
     if (c.escalationReason === 'SLA_BREACH')
       breakdown.push({ factor: 'Escalation: SLA Breach', points: 50 });
     else if (c.escalationReason === 'BILLING_DISPUTE')
@@ -128,14 +394,12 @@ function App() {
 
   return (
     <div className="h-screen w-screen flex bg-graphite-950 text-graphite-200 overflow-hidden font-sans selection:bg-graphite-800 selection:text-white">
-      {/* 1. Left Sidebar Navigation */}
+      {/* 1. Left Sidebar */}
       <aside className="w-14 bg-graphite-950 border-r border-graphite-800/80 flex flex-col items-center py-4 justify-between shrink-0 select-none">
         <div className="flex flex-col items-center space-y-6 w-full">
-          {/* Logo */}
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-400 flex items-center justify-center font-bold text-graphite-950 text-sm shadow-md font-display">
             Y
           </div>
-          {/* Icons */}
           <nav className="flex flex-col items-center space-y-4 w-full">
             <button
               aria-label="Inbox"
@@ -166,7 +430,6 @@ function App() {
           </nav>
         </div>
 
-        {/* User Info / Settings */}
         <div className="flex flex-col items-center space-y-4 w-full">
           <button
             aria-label="Settings"
@@ -193,11 +456,10 @@ function App() {
         </div>
       </aside>
 
-      {/* 2. Workspace Content Layout */}
+      {/* 2. Workspace Content */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Queue column (Left: ~450px) */}
+        {/* Queue column */}
         <section className="w-[420px] lg:w-[450px] xl:w-[480px] shrink-0 border-r border-graphite-800/80 flex flex-col bg-graphite-950 overflow-hidden">
-          {/* Header Stats */}
           <header className="p-4 border-b border-graphite-800/80 shrink-0 space-y-4">
             <div className="flex justify-between items-center">
               <div>
@@ -206,8 +468,6 @@ function App() {
                 </h1>
                 <p className="text-[11px] text-graphite-400">CX agent triage workspace</p>
               </div>
-
-              {/* Demo mutation forced failure toggle */}
               <div className="flex items-center space-x-2 bg-graphite-900 px-2.5 py-1.5 rounded-lg border border-graphite-800/50">
                 <input
                   type="checkbox"
@@ -225,7 +485,6 @@ function App() {
               </div>
             </div>
 
-            {/* Quick Metrics Widget */}
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-graphite-900 border border-graphite-800/50 rounded-lg p-3 text-center space-y-1">
                 <span className="text-[10px] text-graphite-400 font-sans block uppercase tracking-wider">
@@ -257,7 +516,6 @@ function App() {
               </div>
             </div>
 
-            {/* Search Input Filter */}
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-graphite-500">
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -273,7 +531,7 @@ function App() {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search by customer name, tier, keyword..."
+                placeholder="Search queue..."
                 className="w-full pl-9 pr-8 py-1.5 text-sm bg-graphite-900 border border-graphite-800/80 rounded-lg text-graphite-100 placeholder-graphite-500 focus:outline-none focus:border-graphite-700/80 transition-colors"
               />
               {searchTerm && (
@@ -294,9 +552,7 @@ function App() {
             </div>
           </header>
 
-          {/* Queue Scroll List */}
           <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
-            {/* A. Loading Skeletons */}
             {isQueueLoading &&
               Array.from({ length: 6 }).map((_, idx) => (
                 <div
@@ -310,54 +566,34 @@ function App() {
                       <div className="h-3.5 w-14 bg-graphite-800/50 rounded" />
                     </div>
                     <div className="h-2.5 w-4/5 bg-graphite-800/70 rounded" />
-                    <div className="h-2.5 w-28 bg-graphite-800/40 rounded" />
                   </div>
                 </div>
               ))}
 
-            {/* B. Error State */}
             {isQueueError && (
-              <div className="text-center py-10 space-y-2">
-                <span className="text-3xl">⚠️</span>
-                <h3 className="text-sm font-semibold text-urgency-critical">
-                  Network Connection Issue
-                </h3>
-                <p className="text-xs text-graphite-400 max-w-xs mx-auto">
-                  Failed to load conversations from the mock API layer.
-                </p>
+              <div className="text-center py-10 text-xs text-urgency-critical font-sans">
+                Failed to load mock queue from MSW.
               </div>
             )}
 
-            {/* C. Empty Queue State (Win State) */}
             {!isQueueLoading && !isQueueError && triageConversations.length === 0 && (
-              <div className="text-center py-16 space-y-4 px-4 bg-graphite-900/20 border border-dashed border-graphite-800 rounded-xl">
+              <div className="text-center py-16 px-4 bg-graphite-900/20 border border-dashed border-graphite-800 rounded-xl">
                 <span className="text-4xl">🎉</span>
-                <div className="space-y-1">
-                  <h3 className="text-base font-bold text-graphite-100 font-display">
-                    All caught up!
-                  </h3>
-                  <p className="text-xs text-graphite-400 max-w-[240px] mx-auto leading-relaxed">
-                    The active triage queue is clean. Good job keeping the response latency low!
-                  </p>
-                </div>
+                <h3 className="text-sm font-bold text-graphite-100 mt-2 font-display">
+                  All caught up!
+                </h3>
               </div>
             )}
 
-            {/* D. No Search Results State */}
             {!isQueueLoading &&
               !isQueueError &&
-              triageConversations.length > 0 &&
-              filteredConversations.length === 0 && (
-                <div className="text-center py-12 space-y-2 px-4">
-                  <span className="text-2xl text-graphite-500">🔍</span>
-                  <h3 className="text-sm font-semibold text-graphite-300">No matching tickets</h3>
-                  <p className="text-xs text-graphite-500 max-w-[220px] mx-auto">
-                    No results found for "{searchTerm}".
-                  </p>
+              filteredConversations.length === 0 &&
+              triageConversations.length > 0 && (
+                <div className="text-center py-12 text-xs text-graphite-500 font-sans">
+                  No matching tickets found.
                 </div>
               )}
 
-            {/* E. Prioritized Queue List */}
             {!isQueueLoading &&
               !isQueueError &&
               filteredConversations.length > 0 &&
@@ -365,6 +601,7 @@ function App() {
                 const isSelected = c.id === selectedId;
                 const isCritical = c.urgencyScore >= 80;
                 const isElevated = c.urgencyScore >= 40 && c.urgencyScore < 80;
+                const isResolved = c.status === 'RESOLVED';
 
                 let indicatorClass = 'bg-graphite-800 w-[2px]';
                 if (isCritical) {
@@ -387,7 +624,9 @@ function App() {
                   <button
                     key={c.id}
                     onClick={() => setSelectedId(c.id)}
-                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 relative overflow-hidden transition-all duration-150 group border ${
+                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 relative overflow-hidden group border motion-safe:transition-all motion-safe:duration-300 ease-out h-[86px] max-h-[86px] ${
+                      isResolved ? 'animating-out' : ''
+                    } ${
                       isSelected
                         ? 'bg-graphite-900 border-graphite-700 shadow-[0_2px_8px_rgba(0,0,0,0.2)]'
                         : 'bg-graphite-900/30 border-graphite-800/50 hover:bg-graphite-900/50 hover:border-graphite-800'
@@ -422,7 +661,7 @@ function App() {
                         {c.lastMessage}
                       </p>
 
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-1.5 items-center">
                         <span
                           className={`text-[9px] px-2 py-0.5 rounded-full border font-mono tracking-wide uppercase ${chipClass}`}
                         >
@@ -433,6 +672,18 @@ function App() {
                             {c.status}
                           </span>
                         )}
+                        {/* Quick resolve from row */}
+                        {!isResolved && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              resolveMutation.mutate({ id: c.id, forceFail });
+                            }}
+                            className="ml-auto px-2 py-0.5 bg-graphite-950 border border-graphite-800 hover:bg-urgency-critical/10 hover:border-urgency-critical/40 hover:text-urgency-critical text-[9px] text-graphite-300 rounded font-sans transition-colors"
+                          >
+                            Resolve
+                          </button>
+                        )}
                       </div>
                     </div>
                   </button>
@@ -441,14 +692,12 @@ function App() {
           </div>
         </section>
 
-        {/* Detail Panel Area (Right) */}
+        {/* Detail Panel Area */}
         <section className="flex-1 bg-graphite-900 flex flex-col overflow-hidden">
           {currentConversation ? (
-            /* Selected Conversation preview card with background detail query */
             <div className="flex-1 flex flex-col overflow-hidden bg-graphite-900">
-              <header className="p-4 border-b border-graphite-800/80 flex justify-between items-center bg-graphite-900">
+              <header className="p-4 border-b border-graphite-800/80 flex justify-between items-center bg-graphite-900 shrink-0">
                 <div className="flex items-center space-x-3">
-                  {/* Close button */}
                   <button
                     onClick={() => setSelectedId(null)}
                     aria-label="Close conversation detail"
@@ -468,12 +717,8 @@ function App() {
                     <h2 className="text-base font-bold text-graphite-100 font-display">
                       {currentConversation.customerName}
                     </h2>
-                    {/* Background Loading state for contact context */}
                     {isDetailLoading ? (
-                      <div className="flex items-center space-x-2 py-0.5">
-                        <div className="h-2.5 w-24 bg-graphite-800 animate-pulse rounded" />
-                        <div className="h-2.5 w-16 bg-graphite-800/60 animate-pulse rounded" />
-                      </div>
+                      <div className="h-2.5 w-24 bg-graphite-800 animate-pulse rounded mt-1" />
                     ) : (
                       <p className="text-[10px] text-graphite-400 font-mono">
                         {currentConversation.customerEmail} · {currentConversation.customerPhone}
@@ -483,16 +728,6 @@ function App() {
                 </div>
 
                 <div className="flex items-center space-x-2">
-                  {currentConversation.customerTier === 'VIP' ? (
-                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-950/40 text-amber-400 border border-amber-900/40 uppercase tracking-wider">
-                      VIP
-                    </span>
-                  ) : currentConversation.customerTier === 'PRIME' ? (
-                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-blue-950/30 text-blue-300 border border-blue-900/30 uppercase tracking-wider">
-                      PRIME
-                    </span>
-                  ) : null}
-
                   <span
                     className={`text-xs px-2.5 py-1 rounded font-bold border ${
                       currentConversation.urgencyScore >= 80
@@ -507,8 +742,83 @@ function App() {
                 </div>
               </header>
 
-              <div className="flex-1 overflow-y-auto p-5 space-y-6">
-                {/* 1. Explanatory Urgency reasoning breakdown inspect card */}
+              {/* Triage Action bar inside the detail panel */}
+              <div className="px-6 py-3 bg-graphite-950/40 border-b border-graphite-800 flex flex-wrap gap-2 shrink-0">
+                {currentConversation.status === 'UNASSIGNED' && (
+                  <button
+                    onClick={() => claimMutation.mutate(currentConversation.id)}
+                    disabled={claimMutation.isPending}
+                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-100 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                  >
+                    {claimMutation.isPending ? 'Claiming...' : 'Claim Conversation'}
+                  </button>
+                )}
+
+                {currentConversation.status === 'ASSIGNED' && (
+                  <button
+                    onClick={() => reassignMutation.mutate(currentConversation.id)}
+                    disabled={reassignMutation.isPending}
+                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-100 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                  >
+                    {reassignMutation.isPending ? 'Reassigning...' : 'Reassign Queue'}
+                  </button>
+                )}
+
+                {currentConversation.status !== 'RESOLVED' && (
+                  <button
+                    onClick={() =>
+                      resolveMutation.mutate({ id: currentConversation.id, forceFail })
+                    }
+                    disabled={resolveMutation.isPending}
+                    className="px-3 py-1 bg-urgency-critical hover:bg-rose-500 text-xs font-semibold rounded text-white border border-rose-500 disabled:opacity-50 transition-colors font-sans"
+                  >
+                    {resolveMutation.isPending ? 'Resolving...' : 'Resolve'}
+                  </button>
+                )}
+
+                {currentConversation.status !== 'SNOOZED' &&
+                  currentConversation.status !== 'RESOLVED' && (
+                    <button
+                      onClick={() => snoozeMutation.mutate(currentConversation.id)}
+                      disabled={snoozeMutation.isPending}
+                      className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-300 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                    >
+                      {snoozeMutation.isPending ? 'Snoozing...' : 'Snooze'}
+                    </button>
+                  )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                {/* Custom Inline Error panel with Retry option */}
+                {currentError && (
+                  <div className="p-4 bg-rose-950/40 border border-rose-900/40 rounded-xl flex items-center justify-between text-xs font-sans text-rose-300 animate-fadeIn shrink-0">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-base">⚠️</span>
+                      <div>
+                        <span className="font-bold uppercase tracking-wider block text-[9px] text-rose-400">
+                          Triage Action Failed ({currentError.action})
+                        </span>
+                        <span>{currentError.message}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        onClick={() => handleRetry(selectedId!, currentError.action)}
+                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 active:bg-rose-600 border border-rose-500 text-white rounded font-semibold transition-colors"
+                      >
+                        Retry
+                      </button>
+                      <button
+                        onClick={() => handleDismissError(selectedId!)}
+                        className="px-2 py-1 bg-graphite-900 border border-graphite-800 hover:bg-graphite-800 rounded transition-colors text-graphite-400 font-mono"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Score reasoning breakdown */}
                 <div className="bg-graphite-950/50 border border-graphite-800 p-4 rounded-xl space-y-3">
                   <div className="flex justify-between items-center border-b border-graphite-800/80 pb-2">
                     <span className="text-[10px] font-bold text-graphite-400 uppercase tracking-wider font-mono">
@@ -552,17 +862,15 @@ function App() {
                   </div>
                 </div>
 
-                {/* 2. Transcript Section */}
+                {/* Transcript Section */}
                 <div className="space-y-4">
                   <h3 className="text-xs font-semibold text-graphite-400 uppercase tracking-wider font-mono">
                     Conversation Transcript
                   </h3>
 
                   <div className="space-y-3.5">
-                    {/* Optimistic messages preview while loading full transcript */}
                     {isDetailLoading ? (
                       <>
-                        {/* 1. Customer last query which is available from queue list optimistically */}
                         <div className="flex flex-col mr-auto items-start max-w-[85%]">
                           <div className="p-3 rounded-xl text-xs leading-relaxed bg-graphite-950 border border-graphite-800 text-graphite-200 rounded-tl-none">
                             {listConversation?.lastMessage}
@@ -574,19 +882,11 @@ function App() {
                               : ''}
                           </span>
                         </div>
-
-                        {/* 2. Loading Skeletons for other back-and-forth messages */}
                         <div className="flex flex-col ml-auto items-end max-w-[80%] animate-pulse">
                           <div className="p-3 rounded-xl h-12 w-48 bg-graphite-850 rounded-tr-none border border-graphite-800" />
-                          <div className="h-2 w-12 bg-graphite-800 mt-2 rounded" />
-                        </div>
-                        <div className="flex flex-col mr-auto items-start max-w-[70%] animate-pulse">
-                          <div className="p-3 rounded-xl h-10 w-36 bg-graphite-850 rounded-tl-none border border-graphite-800" />
-                          <div className="h-2 w-12 bg-graphite-800 mt-2 rounded" />
                         </div>
                       </>
                     ) : (
-                      /* Complete transcript fully rendered */
                       currentConversation.messages.map((m: Message) => {
                         const isCustomer = m.sender === 'CUSTOMER';
                         const isAgent = m.sender === 'AGENT';
@@ -626,7 +926,7 @@ function App() {
               </div>
             </div>
           ) : (
-            /* F. Empty state */
+            /* Empty state */
             <div className="m-auto space-y-6 max-w-md p-6 text-center select-none">
               <div className="w-16 h-16 rounded-full bg-graphite-950/80 border border-graphite-800 flex items-center justify-center mx-auto text-graphite-500 shadow-inner">
                 <svg
@@ -653,12 +953,11 @@ function App() {
                 </p>
               </div>
 
-              {/* Keyboard shortcuts */}
+              {/* Keyboard shortcuts Reference */}
               <div className="bg-graphite-950/60 border border-graphite-800/80 rounded-xl p-4 text-left space-y-3">
                 <span className="text-[10px] font-semibold text-graphite-400 tracking-wider uppercase font-sans">
                   Keyboard Navigation
                 </span>
-
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs font-sans text-graphite-300">
                   <div className="flex justify-between items-center py-0.5">
                     <span>Next Ticket</span>

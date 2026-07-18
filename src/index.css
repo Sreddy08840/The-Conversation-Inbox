@@ -7,3 +7,19 @@
     @apply bg-graphite-950 text-graphite-200 antialiased font-sans;
   }
 }
+
+@layer utilities {
+  /* Animate ticket out when optimistically resolved */
+  .animating-out {
+    opacity: 0 !important;
+    max-height: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    border-top-width: 0 !important;
+    border-bottom-width: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+  }
+}
