@@ -18,10 +18,6 @@ const queryClient = new QueryClient({
  * Enabled Mock Service Worker in local development before rendering the React App.
  */
 async function enableMocking() {
-  if (!import.meta.env.DEV) {
-    return;
-  }
-
   const { worker } = await import('./mocks/browser');
   // `worker.start()` returns a Promise that resolves when the worker registration is complete
   return worker.start({
