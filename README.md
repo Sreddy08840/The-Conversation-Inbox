@@ -1,5 +1,7 @@
 # Yellow.ai Take-Home Assignment: "The Conversation Inbox"
 
+**Live Demo URL**: [https://the-conversation-inbox-kohl.vercel.app](https://the-conversation-inbox-kohl.vercel.app)
+
 A triage-first workspace designed specifically for a CX agent. Instead of a generic chronological ticket feed, this workspace uses a prioritized queue driven by a computed urgency score, allowing agents to focus on high-impact customer issues.
 
 ---
