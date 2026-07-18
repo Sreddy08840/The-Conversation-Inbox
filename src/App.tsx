@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { Conversation } from './types/inbox';
+import type { Conversation, Message } from './types/inbox';
 
 // Fetch all conversations from MSW Mock API
 async function fetchConversations(): Promise<Conversation[]> {
@@ -11,20 +11,47 @@ async function fetchConversations(): Promise<Conversation[]> {
   return res.json();
 }
 
+// Fetch single detailed conversation from MSW Mock API
+async function fetchConversationDetail(id: string): Promise<Conversation> {
+  const res = await fetch(`/api/conversations/${id}`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch conversation details');
+  }
+  return res.json();
+}
+
 function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [forceFail, setForceFail] = useState(false);
 
-  // TanStack Query to fetch the list
+  // TanStack Query to fetch the list of conversations
   const {
     data: conversations,
-    isLoading,
-    isError,
+    isLoading: isQueueLoading,
+    isError: isQueueError,
   } = useQuery({
     queryKey: ['conversations'],
     queryFn: fetchConversations,
   });
+
+  // Fetch detailed conversation in the background when an item is selected
+  const { data: detailedConversation, isLoading: isDetailLoading } = useQuery({
+    queryKey: ['conversationDetail', selectedId],
+    queryFn: () => fetchConversationDetail(selectedId!),
+    enabled: !!selectedId,
+  });
+
+  // Keyboard listener: deselect/close on pressing Escape
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Calculate stats from the complete (non-filtered) dataset
   const activeUnassigned = conversations?.filter((c) => c.status === 'UNASSIGNED') || [];
@@ -38,10 +65,7 @@ function App() {
       : 0;
 
   // Filter conversations for the queue listing
-  // 1. Exclude RESOLVED tickets from triage view
   const triageConversations = conversations?.filter((c) => c.status !== 'RESOLVED') || [];
-
-  // 2. Apply search filter
   const filteredConversations = triageConversations.filter((c) => {
     const term = searchTerm.toLowerCase();
     return (
@@ -52,8 +76,55 @@ function App() {
     );
   });
 
-  // Identify the selected conversation detail
-  const selectedConversation = conversations?.find((c) => c.id === selectedId);
+  // OPTIMISTIC UI MERGE LOGIC
+  // Find queue-level data for the selected ID immediately so we have it before detail resolves
+  const listConversation = conversations?.find((c) => c.id === selectedId);
+
+  // Merged object that prefers detailed API values, falling back to cached queue list values
+  const currentConversation = detailedConversation || listConversation;
+
+  // Compute detailed urgency points breakdown for display
+  const getScoreBreakdown = (c: Omit<Conversation, 'urgencyScore' | 'urgencyReason'>) => {
+    const breakdown = [];
+    // 1. Tier
+    if (c.customerTier === 'VIP') breakdown.push({ factor: 'Customer Tier: VIP', points: 30 });
+    else if (c.customerTier === 'PRIME')
+      breakdown.push({ factor: 'Customer Tier: Prime', points: 15 });
+
+    // 2. Sentiment
+    if (c.sentiment === 'ANGRY') breakdown.push({ factor: 'Sentiment: Angry', points: 40 });
+    else if (c.sentiment === 'FRUSTRATED')
+      breakdown.push({ factor: 'Sentiment: Frustrated', points: 20 });
+    else if (c.sentiment === 'POSITIVE')
+      breakdown.push({ factor: 'Sentiment: Positive (Reduction)', points: -10 });
+
+    // 3. CSAT Drop
+    if (c.csatScore !== null && c.csatScore < 3)
+      breakdown.push({ factor: 'CSAT Drop (< 3)', points: 25 });
+
+    // 4. Wait Time
+    const waitPts = Math.min(c.waitTimeMinutes * 1.5, 60);
+    if (waitPts > 0) {
+      breakdown.push({
+        factor: `Response Latency (${c.waitTimeMinutes}m @ 1.5/m)`,
+        points: Math.round(waitPts),
+      });
+    }
+
+    // 5. Escalation Reason
+    if (c.escalationReason === 'SLA_BREACH')
+      breakdown.push({ factor: 'Escalation: SLA Breach', points: 50 });
+    else if (c.escalationReason === 'BILLING_DISPUTE')
+      breakdown.push({ factor: 'Escalation: Billing Dispute', points: 20 });
+    else if (c.escalationReason === 'TECHNICAL_BUG')
+      breakdown.push({ factor: 'Escalation: Technical Bug', points: 15 });
+    else if (c.escalationReason === 'NEGATIVE_SENTIMENT')
+      breakdown.push({ factor: 'Escalation: Negative Sentiment', points: 10 });
+
+    return breakdown;
+  };
+
+  const scoreBreakdown = currentConversation ? getScoreBreakdown(currentConversation) : [];
 
   return (
     <div className="h-screen w-screen flex bg-graphite-950 text-graphite-200 overflow-hidden font-sans selection:bg-graphite-800 selection:text-white">
@@ -161,7 +232,7 @@ function App() {
                   Unhandled
                 </span>
                 <span className="text-xl font-bold text-graphite-100 font-display">
-                  {isLoading ? '...' : unassignedCount}
+                  {isQueueLoading ? '...' : unassignedCount}
                 </span>
               </div>
               <div className="bg-graphite-900 border border-graphite-800/50 rounded-lg p-3 text-center space-y-1">
@@ -173,7 +244,7 @@ function App() {
                     breachedCount > 0 ? 'text-urgency-critical' : 'text-graphite-100'
                   }`}
                 >
-                  {isLoading ? '...' : breachedCount}
+                  {isQueueLoading ? '...' : breachedCount}
                 </span>
               </div>
               <div className="bg-graphite-900 border border-graphite-800/50 rounded-lg p-3 text-center space-y-1">
@@ -181,7 +252,7 @@ function App() {
                   Avg Wait
                 </span>
                 <span className="text-xl font-bold text-graphite-100 font-display">
-                  {isLoading ? '...' : `${avgWaitTime}m`}
+                  {isQueueLoading ? '...' : `${avgWaitTime}m`}
                 </span>
               </div>
             </div>
@@ -226,7 +297,7 @@ function App() {
           {/* Queue Scroll List */}
           <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
             {/* A. Loading Skeletons */}
-            {isLoading &&
+            {isQueueLoading &&
               Array.from({ length: 6 }).map((_, idx) => (
                 <div
                   key={idx}
@@ -245,21 +316,20 @@ function App() {
               ))}
 
             {/* B. Error State */}
-            {isError && (
+            {isQueueError && (
               <div className="text-center py-10 space-y-2">
                 <span className="text-3xl">⚠️</span>
                 <h3 className="text-sm font-semibold text-urgency-critical">
                   Network Connection Issue
                 </h3>
                 <p className="text-xs text-graphite-400 max-w-xs mx-auto">
-                  Failed to load conversations from the mock API layer. Make sure MSW is starting
-                  successfully in main.tsx.
+                  Failed to load conversations from the mock API layer.
                 </p>
               </div>
             )}
 
             {/* C. Empty Queue State (Win State) */}
-            {!isLoading && !isError && triageConversations.length === 0 && (
+            {!isQueueLoading && !isQueueError && triageConversations.length === 0 && (
               <div className="text-center py-16 space-y-4 px-4 bg-graphite-900/20 border border-dashed border-graphite-800 rounded-xl">
                 <span className="text-4xl">🎉</span>
                 <div className="space-y-1">
@@ -274,30 +344,28 @@ function App() {
             )}
 
             {/* D. No Search Results State */}
-            {!isLoading &&
-              !isError &&
+            {!isQueueLoading &&
+              !isQueueError &&
               triageConversations.length > 0 &&
               filteredConversations.length === 0 && (
                 <div className="text-center py-12 space-y-2 px-4">
                   <span className="text-2xl text-graphite-500">🔍</span>
                   <h3 className="text-sm font-semibold text-graphite-300">No matching tickets</h3>
                   <p className="text-xs text-graphite-500 max-w-[220px] mx-auto">
-                    No results found for "{searchTerm}". Double-check your spelling or refine your
-                    term.
+                    No results found for "{searchTerm}".
                   </p>
                 </div>
               )}
 
             {/* E. Prioritized Queue List */}
-            {!isLoading &&
-              !isError &&
+            {!isQueueLoading &&
+              !isQueueError &&
               filteredConversations.length > 0 &&
               filteredConversations.map((c) => {
                 const isSelected = c.id === selectedId;
                 const isCritical = c.urgencyScore >= 80;
                 const isElevated = c.urgencyScore >= 40 && c.urgencyScore < 80;
 
-                // Configure Left-Edge Urgency Indicator
                 let indicatorClass = 'bg-graphite-800 w-[2px]';
                 if (isCritical) {
                   indicatorClass =
@@ -308,7 +376,6 @@ function App() {
                   indicatorClass = 'bg-slate-500 w-[2px]';
                 }
 
-                // Configure Reason Chip styling
                 let chipClass = 'bg-slate-950/40 text-slate-400 border-slate-800/80';
                 if (isCritical) {
                   chipClass = 'bg-rose-950/20 text-rose-300 border-rose-900/30 font-semibold';
@@ -326,19 +393,16 @@ function App() {
                         : 'bg-graphite-900/30 border-graphite-800/50 hover:bg-graphite-900/50 hover:border-graphite-800'
                     }`}
                   >
-                    {/* Urgency Indicator Strip */}
                     <div
                       className={`absolute top-0 left-0 h-full transition-all duration-200 ${indicatorClass}`}
                     />
 
                     <div className="flex-1 space-y-1.5 pl-1.5">
-                      {/* Name / Tier & Timer Header */}
                       <div className="flex justify-between items-center">
                         <div className="flex items-center space-x-2">
                           <span className="font-semibold text-xs text-graphite-100 group-hover:text-graphite-50">
                             {c.customerName}
                           </span>
-                          {/* VIP Golden Badge */}
                           {c.customerTier === 'VIP' ? (
                             <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-amber-950/40 text-amber-400 border border-amber-900/40 tracking-wider">
                               VIP
@@ -354,12 +418,10 @@ function App() {
                         </span>
                       </div>
 
-                      {/* Snippet Preview */}
                       <p className="text-xs text-graphite-400 line-clamp-1 group-hover:text-graphite-300">
                         {c.lastMessage}
                       </p>
 
-                      {/* Urgency Reason Chip */}
                       <div className="flex flex-wrap gap-1.5">
                         <span
                           className={`text-[9px] px-2 py-0.5 rounded-full border font-mono tracking-wide uppercase ${chipClass}`}
@@ -379,117 +441,192 @@ function App() {
           </div>
         </section>
 
-        {/* Detail Panel Area (Right: Remaining width) */}
+        {/* Detail Panel Area (Right) */}
         <section className="flex-1 bg-graphite-900 flex flex-col overflow-hidden">
-          {selectedConversation ? (
-            /* Selected Conversation preview card */
+          {currentConversation ? (
+            /* Selected Conversation preview card with background detail query */
             <div className="flex-1 flex flex-col overflow-hidden bg-graphite-900">
-              <header className="p-6 border-b border-graphite-800 flex justify-between items-center bg-graphite-900">
-                <div>
-                  <h2 className="text-lg font-bold text-graphite-100 font-display">
-                    {selectedConversation.customerName}
-                  </h2>
-                  <p className="text-xs text-graphite-400 font-mono">
-                    ID: {selectedConversation.id} · {selectedConversation.customerEmail}
-                  </p>
+              <header className="p-4 border-b border-graphite-800/80 flex justify-between items-center bg-graphite-900">
+                <div className="flex items-center space-x-3">
+                  {/* Close button */}
+                  <button
+                    onClick={() => setSelectedId(null)}
+                    aria-label="Close conversation detail"
+                    className="p-1.5 rounded-lg hover:bg-graphite-800 text-graphite-400 hover:text-graphite-200 transition-colors"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+
+                  <div>
+                    <h2 className="text-base font-bold text-graphite-100 font-display">
+                      {currentConversation.customerName}
+                    </h2>
+                    {/* Background Loading state for contact context */}
+                    {isDetailLoading ? (
+                      <div className="flex items-center space-x-2 py-0.5">
+                        <div className="h-2.5 w-24 bg-graphite-800 animate-pulse rounded" />
+                        <div className="h-2.5 w-16 bg-graphite-800/60 animate-pulse rounded" />
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-graphite-400 font-mono">
+                        {currentConversation.customerEmail} · {currentConversation.customerPhone}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <span
-                  className={`text-xs px-2.5 py-1 rounded font-bold border ${
-                    selectedConversation.urgencyScore >= 80
-                      ? 'bg-urgency-critical/10 border-urgency-critical/30 text-urgency-critical'
-                      : selectedConversation.urgencyScore >= 40
-                        ? 'bg-urgency-elevated/10 border-urgency-elevated/30 text-urgency-elevated'
-                        : 'bg-urgency-calm/10 border-urgency-calm/30 text-urgency-calm'
-                  }`}
-                >
-                  Urgency Score: {selectedConversation.urgencyScore}
-                </span>
+
+                <div className="flex items-center space-x-2">
+                  {currentConversation.customerTier === 'VIP' ? (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-950/40 text-amber-400 border border-amber-900/40 uppercase tracking-wider">
+                      VIP
+                    </span>
+                  ) : currentConversation.customerTier === 'PRIME' ? (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-blue-950/30 text-blue-300 border border-blue-900/30 uppercase tracking-wider">
+                      PRIME
+                    </span>
+                  ) : null}
+
+                  <span
+                    className={`text-xs px-2.5 py-1 rounded font-bold border ${
+                      currentConversation.urgencyScore >= 80
+                        ? 'bg-urgency-critical/10 border-urgency-critical/30 text-urgency-critical'
+                        : currentConversation.urgencyScore >= 40
+                          ? 'bg-urgency-elevated/10 border-urgency-elevated/30 text-urgency-elevated'
+                          : 'bg-urgency-calm/10 border-urgency-calm/30 text-urgency-calm'
+                    }`}
+                  >
+                    Score: {currentConversation.urgencyScore}
+                  </span>
+                </div>
               </header>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {/* Meta Panel Info */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-graphite-950/40 border border-graphite-800 p-4 rounded-xl">
-                  <div>
-                    <span className="text-[10px] text-graphite-500 block uppercase font-mono">
-                      Tier
+              <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                {/* 1. Explanatory Urgency reasoning breakdown inspect card */}
+                <div className="bg-graphite-950/50 border border-graphite-800 p-4 rounded-xl space-y-3">
+                  <div className="flex justify-between items-center border-b border-graphite-800/80 pb-2">
+                    <span className="text-[10px] font-bold text-graphite-400 uppercase tracking-wider font-mono">
+                      Urgency Score Calculation
                     </span>
-                    <span className="text-sm font-semibold text-graphite-200">
-                      {selectedConversation.customerTier}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-graphite-500 block uppercase font-mono">
-                      Sentiment
-                    </span>
-                    <span className="text-sm font-semibold text-graphite-200">
-                      {selectedConversation.sentiment}
+                    <span className="text-[10px] text-graphite-500 font-mono italic">
+                      {currentConversation.urgencyReason}
                     </span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-graphite-500 block uppercase font-mono">
-                      Wait Time
-                    </span>
-                    <span className="text-sm font-semibold text-graphite-200">
-                      {selectedConversation.waitTimeMinutes}m
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-graphite-500 block uppercase font-mono">
-                      CSAT Drop
-                    </span>
-                    <span className="text-sm font-semibold text-graphite-200">
-                      {selectedConversation.csatScore
-                        ? `${selectedConversation.csatScore}/5`
-                        : 'N/A'}
-                    </span>
+
+                  <div className="space-y-1.5">
+                    {scoreBreakdown.map((row, idx) => (
+                      <div
+                        key={idx}
+                        className="flex justify-between items-center text-xs font-mono"
+                      >
+                        <span className="text-graphite-400">· {row.factor}</span>
+                        <span
+                          className={
+                            row.points > 0
+                              ? 'text-amber-500 font-bold'
+                              : 'text-emerald-500 font-bold'
+                          }
+                        >
+                          {row.points > 0 ? `+${row.points}` : row.points}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between items-center text-xs font-bold font-mono border-t border-graphite-800/60 pt-2 text-graphite-200">
+                      <span>Total Urgency Index</span>
+                      <span
+                        className={
+                          currentConversation.urgencyScore >= 80
+                            ? 'text-urgency-critical'
+                            : 'text-graphite-100'
+                        }
+                      >
+                        {currentConversation.urgencyScore}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Transcript messages preview */}
+                {/* 2. Transcript Section */}
                 <div className="space-y-4">
                   <h3 className="text-xs font-semibold text-graphite-400 uppercase tracking-wider font-mono">
                     Conversation Transcript
                   </h3>
-                  <div className="space-y-3">
-                    {selectedConversation.messages.map((m) => {
-                      const isCustomer = m.sender === 'CUSTOMER';
-                      const isAgent = m.sender === 'AGENT';
 
-                      return (
-                        <div
-                          key={m.id}
-                          className={`flex flex-col max-w-[85%] ${
-                            isCustomer
-                              ? 'mr-auto items-start'
-                              : isAgent
-                                ? 'ml-auto items-end'
-                                : 'mx-auto items-center'
-                          }`}
-                        >
-                          <div
-                            className={`p-3 rounded-xl text-xs leading-relaxed ${
-                              isCustomer
-                                ? 'bg-graphite-950 border border-graphite-800 text-graphite-200 rounded-tl-none'
-                                : isAgent
-                                  ? 'bg-amber-500 text-graphite-950 font-medium rounded-tr-none'
-                                  : 'bg-graphite-900 border border-graphite-800/50 text-graphite-400 text-center text-[10px]'
-                            }`}
-                          >
-                            {m.text}
+                  <div className="space-y-3.5">
+                    {/* Optimistic messages preview while loading full transcript */}
+                    {isDetailLoading ? (
+                      <>
+                        {/* 1. Customer last query which is available from queue list optimistically */}
+                        <div className="flex flex-col mr-auto items-start max-w-[85%]">
+                          <div className="p-3 rounded-xl text-xs leading-relaxed bg-graphite-950 border border-graphite-800 text-graphite-200 rounded-tl-none">
+                            {listConversation?.lastMessage}
                           </div>
                           <span className="text-[9px] text-graphite-500 font-mono mt-1 px-1">
-                            {isCustomer ? 'Customer' : isAgent ? 'Agent' : 'System'} ·{' '}
-                            {new Date(m.createdAt).toLocaleTimeString()}
+                            Customer ·{' '}
+                            {listConversation
+                              ? new Date(listConversation.lastMessageAt).toLocaleTimeString()
+                              : ''}
                           </span>
                         </div>
-                      );
-                    })}
+
+                        {/* 2. Loading Skeletons for other back-and-forth messages */}
+                        <div className="flex flex-col ml-auto items-end max-w-[80%] animate-pulse">
+                          <div className="p-3 rounded-xl h-12 w-48 bg-graphite-850 rounded-tr-none border border-graphite-800" />
+                          <div className="h-2 w-12 bg-graphite-800 mt-2 rounded" />
+                        </div>
+                        <div className="flex flex-col mr-auto items-start max-w-[70%] animate-pulse">
+                          <div className="p-3 rounded-xl h-10 w-36 bg-graphite-850 rounded-tl-none border border-graphite-800" />
+                          <div className="h-2 w-12 bg-graphite-800 mt-2 rounded" />
+                        </div>
+                      </>
+                    ) : (
+                      /* Complete transcript fully rendered */
+                      currentConversation.messages.map((m: Message) => {
+                        const isCustomer = m.sender === 'CUSTOMER';
+                        const isAgent = m.sender === 'AGENT';
+
+                        return (
+                          <div
+                            key={m.id}
+                            className={`flex flex-col max-w-[85%] ${
+                              isCustomer
+                                ? 'mr-auto items-start'
+                                : isAgent
+                                  ? 'ml-auto items-end'
+                                  : 'mx-auto items-center'
+                            }`}
+                          >
+                            <div
+                              className={`p-3 rounded-xl text-xs leading-relaxed ${
+                                isCustomer
+                                  ? 'bg-graphite-950 border border-graphite-800 text-graphite-200 rounded-tl-none'
+                                  : isAgent
+                                    ? 'bg-amber-500 text-graphite-950 font-medium rounded-tr-none'
+                                    : 'bg-graphite-900 border border-graphite-800/50 text-graphite-400 text-center text-[10px]'
+                              }`}
+                            >
+                              {m.text}
+                            </div>
+                            <span className="text-[9px] text-graphite-500 font-mono mt-1 px-1">
+                              {isCustomer ? 'Customer' : isAgent ? 'Agent' : 'System'} ·{' '}
+                              {new Date(m.createdAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               </div>
             </div>
           ) : (
-            /* B. Empty state */
+            /* F. Empty state */
             <div className="m-auto space-y-6 max-w-md p-6 text-center select-none">
               <div className="w-16 h-16 rounded-full bg-graphite-950/80 border border-graphite-800 flex items-center justify-center mx-auto text-graphite-500 shadow-inner">
                 <svg
@@ -516,7 +653,7 @@ function App() {
                 </p>
               </div>
 
-              {/* Keyboard navigation quick cheatsheet */}
+              {/* Keyboard shortcuts */}
               <div className="bg-graphite-950/60 border border-graphite-800/80 rounded-xl p-4 text-left space-y-3">
                 <span className="text-[10px] font-semibold text-graphite-400 tracking-wider uppercase font-sans">
                   Keyboard Navigation
