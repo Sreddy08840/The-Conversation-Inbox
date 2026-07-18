@@ -319,12 +319,10 @@ function App() {
   // Keyboard Shortcuts Hook
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // 1. Ignore shortcuts if user is typing inside search inputs
       const isInputFocused =
         document.activeElement?.tagName === 'INPUT' ||
         document.activeElement?.tagName === 'TEXTAREA';
 
-      // Global Escape key behavior
       if (event.key === 'Escape') {
         if (isInputFocused) {
           (document.activeElement as HTMLElement).blur();
@@ -336,14 +334,12 @@ function App() {
 
       if (isInputFocused) return;
 
-      // 2. Search shortcut: '/' key
       if (event.key === '/') {
         event.preventDefault();
         searchInputRef.current?.focus();
         return;
       }
 
-      // 3. Move queue selections: j (down) / k (up)
       const visibleItems = filteredConversations.filter((c) => c.status !== 'RESOLVED');
       if (event.key === 'j' || event.key === 'ArrowDown') {
         event.preventDefault();
@@ -369,7 +365,6 @@ function App() {
         return;
       }
 
-      // 4. Action keys: c (claim), r (resolve), s (snooze)
       if (!selectedId) return;
       const current = visibleItems.find((c) => c.id === selectedId);
       if (!current) return;
@@ -461,18 +456,24 @@ function App() {
 
   return (
     <div className="h-screen w-screen flex bg-graphite-950 text-graphite-200 overflow-hidden font-sans selection:bg-graphite-800 selection:text-white">
-      {/* 1. Left Sidebar */}
-      <aside className="w-14 bg-graphite-950 border-r border-graphite-800/80 flex flex-col items-center py-4 justify-between shrink-0 select-none">
+      {/* 1. Left Sidebar - Hidden on small screen sizes */}
+      <aside className="w-14 bg-graphite-950 border-r border-graphite-800/80 hidden sm:flex flex-col items-center py-4 justify-between shrink-0 select-none">
         <div className="flex flex-col items-center space-y-6 w-full">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-400 flex items-center justify-center font-bold text-graphite-950 text-sm shadow-md font-display">
             Y
           </div>
-          <nav className="flex flex-col items-center space-y-4 w-full">
+          <nav className="flex flex-col items-center space-y-4 w-full" aria-label="Main Navigation">
             <button
               aria-label="Inbox"
-              className="w-10 h-10 rounded-lg flex items-center justify-center text-amber-500 bg-graphite-900 border border-graphite-800/50 transition-colors"
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-amber-500 bg-graphite-900 border border-graphite-800/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                aria-hidden="true"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -483,9 +484,15 @@ function App() {
             </button>
             <button
               aria-label="Analytics"
-              className="w-10 h-10 rounded-lg flex items-center justify-center text-graphite-400 hover:text-graphite-200 hover:bg-graphite-900/50 transition-colors"
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-graphite-400 hover:text-graphite-200 hover:bg-graphite-900/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                aria-hidden="true"
+              >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -500,9 +507,15 @@ function App() {
         <div className="flex flex-col items-center space-y-4 w-full">
           <button
             aria-label="Settings"
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-graphite-400 hover:text-graphite-200 transition-colors"
+            className="w-10 h-10 rounded-lg flex items-center justify-center text-graphite-400 hover:text-graphite-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -523,10 +536,15 @@ function App() {
         </div>
       </aside>
 
-      {/* 2. Workspace Content */}
+      {/* 2. Workspace Content Layout */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Queue column */}
-        <section className="w-[420px] lg:w-[450px] xl:w-[480px] shrink-0 border-r border-graphite-800/80 flex flex-col bg-graphite-950 overflow-hidden">
+        {/* Queue column - Responsively switch visibility on mobile */}
+        <section
+          className={`w-full md:w-[420px] lg:w-[450px] xl:w-[480px] shrink-0 border-r border-graphite-800/80 flex flex-col bg-graphite-950 overflow-hidden ${
+            selectedId !== null ? 'hidden md:flex' : 'flex'
+          }`}
+          aria-label="Queue list pane"
+        >
           <header className="p-4 border-b border-graphite-800/80 shrink-0 space-y-4">
             <div className="flex justify-between items-center">
               <div>
@@ -585,7 +603,13 @@ function App() {
 
             <div className="relative">
               <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-graphite-500">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -600,14 +624,20 @@ function App() {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search queue... (press '/' to focus)"
-                className="w-full pl-9 pr-8 py-1.5 text-sm bg-graphite-900 border border-graphite-800/80 rounded-lg text-graphite-100 placeholder-graphite-500 focus:outline-none focus:border-graphite-700/80 transition-colors"
+                className="w-full pl-9 pr-8 py-1.5 text-sm bg-graphite-900 border border-graphite-800/80 rounded-lg text-graphite-100 placeholder-graphite-500 focus:outline-none focus:ring-2 focus:ring-amber-500/80 focus:border-amber-500/80 transition-colors"
               />
               {searchTerm && (
                 <button
                   onClick={() => setSearchTerm('')}
                   className="absolute inset-y-0 right-0 pr-3 flex items-center text-graphite-500 hover:text-graphite-300"
                 >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    aria-hidden="true"
+                  >
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -620,12 +650,16 @@ function App() {
             </div>
           </header>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
-            {/* Initial Loading Skeletons - Exact row size alignment */}
+          <div
+            className="flex-1 overflow-y-auto p-4 space-y-2.5"
+            role="list"
+            aria-label="Conversation prioritized queue"
+          >
             {isQueueLoading &&
               Array.from({ length: 6 }).map((_, idx) => (
                 <div
                   key={idx}
+                  role="listitem"
                   className="p-3 bg-graphite-900/40 border border-graphite-800/50 rounded-lg flex items-center space-x-3 h-[86px] relative overflow-hidden animate-pulse"
                 >
                   <div className="absolute top-0 left-0 w-[4px] h-full bg-graphite-800" />
@@ -640,7 +674,6 @@ function App() {
                 </div>
               ))}
 
-            {/* Audited Queue Error State */}
             {isQueueError && (
               <div className="text-center py-12 px-4 space-y-3 bg-graphite-900/10 border border-rose-900/30 rounded-xl">
                 <span className="text-3xl">⚠️</span>
@@ -655,14 +688,13 @@ function App() {
                 </div>
                 <button
                   onClick={() => refetchQueue()}
-                  className="px-3 py-1 bg-graphite-900 hover:bg-graphite-800 active:bg-graphite-950 text-xs font-semibold rounded text-graphite-200 border border-graphite-800 transition-colors"
+                  className="px-3 py-1 bg-graphite-900 hover:bg-graphite-800 active:bg-graphite-950 text-xs font-semibold rounded text-graphite-200 border border-graphite-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                 >
                   Reload Queue
                 </button>
               </div>
             )}
 
-            {/* Audited Caught-up win state */}
             {!isQueueLoading &&
               !isQueueError &&
               triageConversations.filter((c) => c.status !== 'RESOLVED').length === 0 && (
@@ -672,14 +704,13 @@ function App() {
                     <h3 className="text-base font-bold text-graphite-100 font-display">
                       Triage Queue Clean
                     </h3>
-                    <p className="text-xs text-graphite-400 max-w-[240px] mx-auto leading-relaxed">
+                    <p className="text-xs text-graphite-400 max-w-[240px] mx-auto leading-relaxed font-sans">
                       All active tickets are handled. Enjoy the empty inbox!
                     </p>
                   </div>
                 </div>
               )}
 
-            {/* Audited search empty state */}
             {!isQueueLoading &&
               !isQueueError &&
               filteredConversations.filter((c) => c.status !== 'RESOLVED').length === 0 &&
@@ -716,78 +747,86 @@ function App() {
                 }
 
                 return (
-                  <button
-                    key={c.id}
-                    onClick={() => setSelectedId(c.id)}
-                    className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 relative overflow-hidden group border motion-safe:transition-all motion-safe:duration-300 ease-out h-[86px] max-h-[86px] ${
-                      isResolved ? 'animating-out' : ''
-                    } ${
-                      isSelected
-                        ? 'bg-graphite-900 border-amber-500/50 ring-1 ring-amber-500/30 shadow-[0_0_12px_rgba(251,191,36,0.05)]'
-                        : 'bg-graphite-900/30 border-graphite-800/50 hover:bg-graphite-900/50 hover:border-graphite-800'
-                    }`}
-                  >
-                    <div
-                      className={`absolute top-0 left-0 h-full transition-all duration-200 ${indicatorClass}`}
-                    />
+                  <div key={c.id} role="listitem">
+                    <button
+                      onClick={() => setSelectedId(c.id)}
+                      aria-selected={isSelected}
+                      aria-label={`${c.customerName}, tier ${c.customerTier}, wait time ${c.waitTimeMinutes} minutes, urgency score ${c.urgencyScore}, status ${c.status}. Reason: ${c.urgencyReason}`}
+                      className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 relative overflow-hidden group border motion-safe:transition-all motion-safe:duration-300 ease-out h-[86px] max-h-[86px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80 focus-visible:ring-offset-2 focus-visible:ring-offset-graphite-950 ${
+                        isResolved ? 'animating-out' : ''
+                      } ${
+                        isSelected
+                          ? 'bg-graphite-900 border-amber-500/50 ring-1 ring-amber-500/30 shadow-[0_0_12px_rgba(251,191,36,0.05)]'
+                          : 'bg-graphite-900/30 border-graphite-800/50 hover:bg-graphite-900/50 hover:border-graphite-800'
+                      }`}
+                    >
+                      <div
+                        className={`absolute top-0 left-0 h-full transition-all duration-200 ${indicatorClass}`}
+                      />
 
-                    <div className="flex-1 space-y-1.5 pl-1.5">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-semibold text-xs text-graphite-100 group-hover:text-graphite-50">
-                            {c.customerName}
+                      <div className="flex-1 space-y-1.5 pl-1.5">
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-semibold text-xs text-graphite-100 group-hover:text-graphite-50">
+                              {c.customerName}
+                            </span>
+                            {c.customerTier === 'VIP' ? (
+                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-amber-950/40 text-amber-400 border border-amber-900/40 tracking-wider">
+                                VIP
+                              </span>
+                            ) : c.customerTier === 'PRIME' ? (
+                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-blue-950/30 text-blue-300 border border-blue-900/30 tracking-wider">
+                                PRIME
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="text-[10px] text-graphite-400 font-mono">
+                            {c.waitTimeMinutes}m ago
                           </span>
-                          {c.customerTier === 'VIP' ? (
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-amber-950/40 text-amber-400 border border-amber-900/40 tracking-wider">
-                              VIP
-                            </span>
-                          ) : c.customerTier === 'PRIME' ? (
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-blue-950/30 text-blue-300 border border-blue-900/30 tracking-wider">
-                              PRIME
-                            </span>
-                          ) : null}
                         </div>
-                        <span className="text-[10px] text-graphite-400 font-mono">
-                          {c.waitTimeMinutes}m ago
-                        </span>
-                      </div>
 
-                      <p className="text-xs text-graphite-400 line-clamp-1 group-hover:text-graphite-300">
-                        {c.lastMessage}
-                      </p>
+                        <p className="text-xs text-graphite-400 line-clamp-1 group-hover:text-graphite-300">
+                          {c.lastMessage}
+                        </p>
 
-                      <div className="flex flex-wrap gap-1.5 items-center">
-                        <span
-                          className={`text-[9px] px-2 py-0.5 rounded-full border font-mono tracking-wide uppercase ${chipClass}`}
-                        >
-                          {c.urgencyReason}
-                        </span>
-                        {c.status !== 'UNASSIGNED' && (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-graphite-950/50 text-graphite-500 border border-graphite-800 font-mono uppercase">
-                            {c.status}
-                          </span>
-                        )}
-                        {!isResolved && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              resolveMutation.mutate({ id: c.id, forceFail });
-                            }}
-                            className="ml-auto px-2 py-0.5 bg-graphite-950 border border-graphite-800 hover:bg-urgency-critical/10 hover:border-urgency-critical/40 hover:text-urgency-critical text-[9px] text-graphite-300 rounded font-sans transition-colors"
+                        <div className="flex flex-wrap gap-1.5 items-center">
+                          <span
+                            className={`text-[9px] px-2 py-0.5 rounded-full border font-mono tracking-wide uppercase ${chipClass}`}
                           >
-                            Resolve
-                          </button>
-                        )}
+                            {c.urgencyReason}
+                          </span>
+                          {c.status !== 'UNASSIGNED' && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-graphite-950/50 text-graphite-500 border border-graphite-800 font-mono uppercase">
+                              {c.status}
+                            </span>
+                          )}
+                          {!isResolved && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                resolveMutation.mutate({ id: c.id, forceFail });
+                              }}
+                              className="ml-auto px-2 py-0.5 bg-graphite-950 border border-graphite-800 hover:bg-urgency-critical/10 hover:border-urgency-critical/40 hover:text-urgency-critical text-[9px] text-graphite-300 rounded font-sans transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
+                            >
+                              Resolve
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                  </div>
                 );
               })}
           </div>
         </section>
 
-        {/* Detail Panel Area */}
-        <section className="flex-1 bg-graphite-900 flex flex-col overflow-hidden">
+        {/* Detail Panel Area - Responsively switch visibility on mobile */}
+        <section
+          className={`flex-1 bg-graphite-900 flex flex-col overflow-hidden ${
+            selectedId !== null ? 'flex' : 'hidden md:flex'
+          }`}
+          aria-label="Conversation detail pane"
+        >
           {currentConversation ? (
             <div className="flex-1 flex flex-col overflow-hidden bg-graphite-900">
               <header className="p-4 border-b border-graphite-800/80 flex justify-between items-center bg-graphite-900 shrink-0">
@@ -795,9 +834,15 @@ function App() {
                   <button
                     onClick={() => setSelectedId(null)}
                     aria-label="Close conversation detail"
-                    className="p-1.5 rounded-lg hover:bg-graphite-800 text-graphite-400 hover:text-graphite-200 transition-colors"
+                    className="p-1.5 rounded-lg hover:bg-graphite-800 text-graphite-400 hover:text-graphite-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                   >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
@@ -836,12 +881,13 @@ function App() {
                 </div>
               </header>
 
+              {/* Triage Action bar inside the detail panel */}
               <div className="px-6 py-3 bg-graphite-950/40 border-b border-graphite-800 flex flex-wrap gap-2 shrink-0">
                 {currentConversation.status === 'UNASSIGNED' && (
                   <button
                     onClick={() => claimMutation.mutate(currentConversation.id)}
                     disabled={claimMutation.isPending}
-                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-100 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-100 border border-graphite-700 disabled:opacity-50 transition-colors font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                   >
                     {claimMutation.isPending ? 'Claiming...' : 'Claim Conversation'}
                   </button>
@@ -851,7 +897,7 @@ function App() {
                   <button
                     onClick={() => reassignMutation.mutate(currentConversation.id)}
                     disabled={reassignMutation.isPending}
-                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-300 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                    className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-300 border border-graphite-700 disabled:opacity-50 transition-colors font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                   >
                     {reassignMutation.isPending ? 'Reassigning...' : 'Reassign Queue'}
                   </button>
@@ -863,7 +909,7 @@ function App() {
                       resolveMutation.mutate({ id: currentConversation.id, forceFail })
                     }
                     disabled={resolveMutation.isPending}
-                    className="px-3 py-1 bg-urgency-critical hover:bg-rose-500 text-xs font-semibold rounded text-white border border-rose-500 disabled:opacity-50 transition-colors font-sans"
+                    className="px-3 py-1 bg-urgency-critical hover:bg-rose-500 text-xs font-semibold rounded text-white border border-rose-500 disabled:opacity-50 transition-colors font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                   >
                     {resolveMutation.isPending ? 'Resolving...' : 'Resolve'}
                   </button>
@@ -874,7 +920,7 @@ function App() {
                     <button
                       onClick={() => snoozeMutation.mutate(currentConversation.id)}
                       disabled={snoozeMutation.isPending}
-                      className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-300 border border-graphite-700 disabled:opacity-50 transition-colors font-sans"
+                      className="px-3 py-1 bg-graphite-800 hover:bg-graphite-700 text-xs font-semibold rounded text-graphite-300 border border-graphite-700 disabled:opacity-50 transition-colors font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                     >
                       {snoozeMutation.isPending ? 'Snoozing...' : 'Snooze'}
                     </button>
@@ -886,7 +932,9 @@ function App() {
                 {currentError && (
                   <div className="p-4 bg-rose-950/40 border border-rose-900/40 rounded-xl flex items-center justify-between text-xs font-sans text-rose-300 animate-fadeIn shrink-0">
                     <div className="flex items-center space-x-2">
-                      <span className="text-base">⚠️</span>
+                      <span className="text-base" role="img" aria-label="Warning">
+                        ⚠️
+                      </span>
                       <div>
                         <span className="font-bold uppercase tracking-wider block text-[9px] text-rose-400">
                           Triage failed ({currentError.action})
@@ -897,13 +945,13 @@ function App() {
                     <div className="flex items-center space-x-2 shrink-0">
                       <button
                         onClick={() => handleRetry(selectedId!, currentError.action)}
-                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 active:bg-rose-600 border border-rose-500 text-white rounded font-semibold transition-colors"
+                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 active:bg-rose-600 border border-rose-500 text-white rounded font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                       >
                         Retry
                       </button>
                       <button
                         onClick={() => handleDismissError(selectedId!)}
-                        className="px-2 py-1 bg-graphite-900 border border-graphite-800 hover:bg-graphite-800 rounded transition-colors text-graphite-400 font-mono"
+                        className="px-2 py-1 bg-graphite-900 border border-graphite-800 hover:bg-graphite-800 rounded transition-colors text-graphite-400 font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/80"
                       >
                         Dismiss
                       </button>
@@ -1028,6 +1076,7 @@ function App() {
                   viewBox="0 0 24 24"
                   stroke="currentColor"
                   strokeWidth={1.5}
+                  aria-hidden="true"
                 >
                   <path
                     strokeLinecap="round"
